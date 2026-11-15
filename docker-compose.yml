@@ -81,12 +81,10 @@ services:
         limits:
           cpus: "2.0"       # max 2 vCPUs; tune for your host
           memory: 768M      # hard ceiling — OOMKill before host swaps
+          pids: 100         # fork-bomb mitigation (Compose v5: must live here)
         reservations:
           cpus: "0.25"      # always guaranteed; prevents starvation
           memory: 256M
-
-    # Hard PID cap — a fork-bomb or runaway worker pool can't exhaust the host.
-    pids_limit: 100
 
     # Open-file descriptor limit — 65536 is a typical production value.
     # Keeps the app from exhausting fd slots on a shared host.
