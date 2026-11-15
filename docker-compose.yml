@@ -1,40 +1,135 @@
 name: wacrm
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Secure, sandboxed docker-compose for wacrm.
+#
+# Quick start:
+#   cp .env.local.example .env.local   # fill in your credentials
+#   docker compose --env-file .env.local up --build -d
+#
+# Move the published port:
+#   HOST_PORT=8080 docker compose --env-file .env.local up -d
+#
+# NEXT_PUBLIC_* vars are inlined at build time — always pass --build
+# after changing them (they don't take effect with just a restart).
+# ─────────────────────────────────────────────────────────────────────────────
+
 services:
   app:
     build:
       context: .
-      # NEXT_PUBLIC_* vars are inlined at build time — forward them
-      # from .env.local as build args. Changing any of them requires
-      # a rebuild (docker compose up --build).
       args:
-        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_URL:      ${NEXT_PUBLIC_SUPABASE_URL}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
-        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-}
-        NEXT_PUBLIC_APP_LOCALE: ${NEXT_PUBLIC_APP_LOCALE:-en}
-    # Runtime (server-only) secrets come from .env.local; they are
-    # never baked into the image.
+        NEXT_PUBLIC_SITE_URL:          ${NEXT_PUBLIC_SITE_URL:-}
+        NEXT_PUBLIC_APP_LOCALE:        ${NEXT_PUBLIC_APP_LOCALE:-en}
+
+    # Runtime secrets from .env.local — never baked into the image.
     env_file:
       - .env.local
-    # The server always listens on 3000 inside the container. Pinned
-    # here because `environment` wins over `env_file`, so a stray PORT
-    # in .env.local can't desync the app from the mapping and the
-    # healthcheck below.
+
+    # Pins the internal port so a stray PORT= in .env.local can't
+    # de-sync the app from the healthcheck and port mapping.
     environment:
-      PORT: 3000
-    # Host side only — HOST_PORT=8080 publishes the app on :8080.
+      PORT: "3000"
+
+    # Publish only the host-side port. App always listens on 3000 inside.
     ports:
-      - '${HOST_PORT:-3000}:3000'
+      - "${HOST_PORT:-3000}:3000"
+
+    # ── Network isolation ─────────────────────────────────────────────────────
+    # Attach only to the isolated wacrm bridge — not the default Docker bridge.
+    networks:
+      - wacrm_net
+
+    # ── Identity ──────────────────────────────────────────────────────────────
+    # Reinforce the non-root user set in the Dockerfile (uid:gid 1001:1001).
+    user: "1001:1001"
+
+    # ── Privilege hardening ───────────────────────────────────────────────────
+
+    # Block setuid/setgid privilege escalation at the kernel level.
+    security_opt:
+      - no-new-privileges:true
+
+    # Drop every Linux capability — a Node.js HTTP server on port > 1024
+    # requires none. Add back only what your workload explicitly needs.
+    cap_drop:
+      - ALL
+
+    # Read-only root filesystem — the container cannot write to disk.
+    # Limits the blast radius of any RCE: an attacker can run code but
+    # cannot persist files, install tools, or modify the binary.
+    # Writable paths are granted below via tmpfs.
+    read_only: true
+
+    # Writable in-memory filesystems mounted over the read-only root.
+    tmpfs:
+      # Standard POSIX temp dir (Node.js, sharp, OS scratch).
+      # noexec: uploaded/processed files can't be executed as binaries.
+      - /tmp:mode=1777,size=128m,noexec,nosuid
+
+      # Next.js ISR / fetch cache — optional but improves warm start for
+      # cached routes. Contents are lost on container restart (acceptable).
+      # Owned by uid 1001 so the nextjs user can write without sudo.
+      - /app/.next/cache:mode=0750,uid=1001,gid=1001,size=256m,noexec,nosuid
+
+    # ── Resource limits ───────────────────────────────────────────────────────
+    # Prevent a runaway process from consuming the host's CPU/RAM.
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"       # max 2 vCPUs; tune for your host
+          memory: 768M      # hard ceiling — OOMKill before host swaps
+        reservations:
+          cpus: "0.25"      # always guaranteed; prevents starvation
+          memory: 256M
+
+    # Hard PID cap — a fork-bomb or runaway worker pool can't exhaust the host.
+    pids_limit: 100
+
+    # Open-file descriptor limit — 65536 is a typical production value.
+    # Keeps the app from exhausting fd slots on a shared host.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    # ── Logging ───────────────────────────────────────────────────────────────
+    # Rotate logs so a chatty app can't exhaust disk.
+    # 5 × 10 MB = 50 MB max per container.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+        compress: "true"
+
+    # ── Reliability ───────────────────────────────────────────────────────────
     restart: unless-stopped
+
     healthcheck:
       test:
         [
-          'CMD',
-          'node',
-          '-e',
-          "fetch('http://localhost:3000').then((r)=>process.exit(r.ok||r.status<500?0:1)).catch(()=>process.exit(1))",
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000').then(r=>process.exit(r.ok||r.status<500?0:1)).catch(()=>process.exit(1))",
         ]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      start_period: 20s
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Networks
+# ─────────────────────────────────────────────────────────────────────────────
+networks:
+  wacrm_net:
+    driver: bridge
+    # `internal: false` → the container can reach external services
+    # (Supabase, Meta Cloud API, OpenAI …). Set to `true` and add a
+    # reverse-proxy service if you want to enforce egress via a proxy.
+    driver_opts:
+      # Explicit bridge name makes `ip link` output readable on the host.
+      com.docker.network.bridge.name: br-wacrm

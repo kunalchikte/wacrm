@@ -1,17 +1,80 @@
+# ─── Version control ──────────────────────────────────────────────────────────
 .git
+.gitignore
+.gitattributes
+
+# ─── GitHub / CI ──────────────────────────────────────────────────────────────
 .github
+
+# ─── Build outputs ────────────────────────────────────────────────────────────
+# Never copy in; they are produced inside the container by npm run build.
 .next
+out
+dist
+build
+
+# ─── Node dependencies ────────────────────────────────────────────────────────
+# Installed inside the container by npm ci; local copies may differ in OS/arch.
 node_modules
+**/node_modules
+
+# ─── Environment & secrets ────────────────────────────────────────────────────
+# Injected at runtime via env_file — never baked into the image.
+.env
+.env.*
+!.env.local.example
+
+# ─── Subpackages not needed at runtime ───────────────────────────────────────
 docs
 mcp-server
 supabase
+
+# ─── Documentation ────────────────────────────────────────────────────────────
 *.md
 !README.md
-.env*
-!.env.local.example
-Dockerfile
-docker-compose*.yml
-.dockerignore
+
+# ─── IDE & tooling ────────────────────────────────────────────────────────────
 .vscode
 .idea
+.cursor
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Tests & coverage ─────────────────────────────────────────────────────────
 coverage
+.nyc_output
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+__tests__
+test
+tests
+vitest.config.*
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─── Temporary & cache files ──────────────────────────────────────────────────
+tmp
+.tmp
+*.tmp
+.cache
+.turbo
+.parcel-cache
+
+# ─── Platform / deploy ────────────────────────────────────────────────────────
+.vercel
+.netlify
+
+# ─── Docker files themselves ──────────────────────────────────────────────────
+# Prevents Dockerfile + compose changes from busting the build cache
+# when only the image definition changed, not the app source.
+Dockerfile
+Dockerfile.*
+docker-compose*.yml
+.dockerignore
